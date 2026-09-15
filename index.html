@@ -116,37 +116,53 @@ function fmt(n){return Math.round(n).toLocaleString('es-ES')}
 function colH(e,be){return e<=0?'var(--faint)':e>=be?'var(--good)':e>=be*0.97?'var(--warn)':'var(--bad)'}
 function toggleCmp(){cmp=!cmp;render()}
 function setBlk(b){blk=b;render()}
-function inBlk(t){return blk===''?true:(blk==='_m'?t.hasM:t.hasT);}
+function inBlk(t,bk){bk=(bk===undefined)?blk:bk;return bk===''?true:(bk==='_m'?t.hasM:t.hasT);}
 function deltaTag(cur_,prev_){const dv=(+cur_||0)-(+prev_||0);if(dv>0)return '<div class="ddelta up">▲ +'+dv+'</div>';if(dv<0)return '<div class="ddelta down">▼ '+dv+'</div>';return '<div class="ddelta">&nbsp;</div>';}
 function initState(){state={};for(const c in DATA){state[c]={};DATA[c].turnos.forEach(t=>{state[c][t.turno]={fire:0,hire:0,dist:Object.assign({},t.distActual)}})}}
 function restByDay(dist){const r=[0,0,0,0,0,0,0];for(const k in dist){(REST[k]||[]).forEach(d=>r[d]+=(+dist[k]||0))}return r}
-function compute(c){const o=DATA[c];const wh=[0,0,0,0,0,0,0];let ech=0,con=0,mov=0;
-  o.turnos.forEach(t=>{const s=state[c][t.turno];const inb=inBlk(t);
-    const whB=t['whByDay'+blk]||t.whByDay, hB=t['hByDay'+blk]||t.hByDay;
+function compute(c,bk){bk=(bk===undefined)?blk:bk;const o=DATA[c];const wh=[0,0,0,0,0,0,0];let ech=0,con=0,mov=0;
+  o.turnos.forEach(t=>{const s=state[c][t.turno];const inb=inBlk(t,bk);
+    const whB=t['whByDay'+bk]||t.whByDay, hB=t['hByDay'+bk]||t.hByDay;
     if(inb){ech+=s.fire;con+=s.hire;}
     const scale=(t.N-s.fire+s.hire)/t.N;const cr=restByDay(t.distActual),nr=restByDay(s.dist);
     for(let d=0;d<7;d++){let x=whB[d]*scale;x-=(nr[d]-cr[d])*hB[d]*scale;wh[d]+=Math.max(0,x)}
     if(inb){let mv=0;for(const k in s.dist)mv+=Math.abs((+s.dist[k]||0)-(t.distActual[k]||0));mov+=mv/2;}
-  });for(let d=0;d<7;d++)wh[d]+=(o.day[d]['otros'+blk]||0);return {wh,ech,con,mov:Math.round(mov)};}
+  });for(let d=0;d<7;d++)wh[d]+=(o.day[d]['otros'+bk]||0);return {wh,ech,con,mov:Math.round(mov)};}
 function renderHeats(o){
   const H=o.hm, DD=['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'], be=H.be;
   const BAND=['var(--bad)','var(--warn)','color-mix(in srgb,var(--good) 45%,var(--surface))','var(--good)'];
   const BNAME=['Super valle','Valle','Pico','Super pico'], BLET=['SV','V','P','SP'];
-  // RE/h = RE ÷ WH (demanda por hora de conductor)
-  let maxRewh=0.001;
-  for(let h=0;h<24;h++)for(let d=0;d<7;d++){const w=H.wh[h][d];if(w>0)maxRewh=Math.max(maxRewh,H.re[h][d]/w);}
+  // multiplicadores de WH por día y franja según TUS cambios (rotación/altas/libranzas)
+  const cM=compute(cur,'_m'), cT=compute(cur,'_t'), multM=[],multT=[];
+  for(let d=0;d<7;d++){const bm=o.day[d].WH0_m||0,bt=o.day[d].WH0_t||0;multM[d]=bm>0?cM.wh[d]/bm:1;multT[d]=bt>0?cT.wh[d]/bt:1;}
+  const mult=(h,d)=>(h>=6&&h<=14)?multM[d]:multT[d];
+  // valores por celda tras la simulación: WH escala → RE/WH y €/h = base ÷ multiplicador
+  const RW=[],EU=[];let minRw=1e9,maxRw=0;
+  for(let h=0;h<24;h++){RW.push([]);EU.push([]);for(let d=0;d<7;d++){
+    const re=H.re[h][d],wh=H.wh[h][d],m=mult(h,d),whS=wh*m;
+    const rw=(whS>0)?re/whS:0, eu=(whS>0&&m>0)?H.eur[h][d]/m:0;
+    RW[h][d]=rw;EU[h][d]=eu;if(whS>0&&rw>0){if(rw<minRw)minRw=rw;if(rw>maxRw)maxRw=rw;}
+  }}
+  if(maxRw<=minRw)maxRw=minRw+0.001;
+  // bandas recalculadas sobre los valores actuales (12 SP · 59 P · 67 V · 30 SV)
+  const IDX=[];for(let h=0;h<24;h++)for(let d=0;d<7;d++)IDX.push([h,d]);
+  const oRe=IDX.map((c,i)=>i).sort((a,b)=>RW[IDX[a][0]][IDX[a][1]]-RW[IDX[b][0]][IDX[b][1]]);
+  const oEu=IDX.map((c,i)=>i).sort((a,b)=>EU[IDX[a][0]][IDX[a][1]]-EU[IDX[b][0]][IDX[b][1]]);
+  const rk=new Array(168).fill(0);oRe.forEach((i,p)=>rk[i]+=p);oEu.forEach((i,p)=>rk[i]+=p);
+  const ord=IDX.map((c,i)=>i).sort((a,b)=>rk[b]-rk[a]);
+  const BND=[];for(let h=0;h<24;h++)BND.push(new Array(7).fill(0));
+  ord.forEach((i,p)=>{const h=IDX[i][0],d=IDX[i][1];BND[h][d]=p<12?3:p<71?2:p<138?1:0;});
   function grid(kind){
     let g='<div class="hg"><div></div>';
     DD.forEach(d=>{g+='<div class="hh">'+d+'</div>'});
     for(let h=0;h<24;h++){
       g+='<div class="hr">'+h+'</div>';
       for(let d=0;d<7;d++){
-        const re=H.re[h][d],eu=H.eur[h][d],wh=H.wh[h][d];const rewh=wh>0?re/wh:0;
-        let bg,txt,cls='hc';
-        if(kind==='re'){const t=rewh/maxRewh;bg='color-mix(in srgb, var(--accent) '+(8+t*57).toFixed(0)+'%, var(--surface))';txt=rewh>0?rewh.toFixed(1):'';}
-        else if(kind==='eur'){if(eu<=0){bg='var(--surface2)';txt='';}else{if(eu>=be){const t=Math.min((eu/be-1)/0.4,1);bg='color-mix(in srgb, var(--good) '+(20+t*50).toFixed(0)+'%, var(--surface))';}else{const t=Math.min((1-eu/be)/0.4,1);bg='color-mix(in srgb, var(--bad) '+(20+t*50).toFixed(0)+'%, var(--surface))';}txt=Math.round(eu);}}
-        else {bg=BAND[H.band[h][d]];txt=BLET[H.band[h][d]];cls='hc band';}
-        const tt=DD[d]+' '+h+'h · RE '+Math.round(re)+' · €/h '+eu.toFixed(1)+' · WH '+Math.round(wh)+' · RE/WH '+(wh>0?rewh.toFixed(2):'—')+' · '+BNAME[H.band[h][d]];
+        const rw=RW[h][d],eu=EU[h][d],b=BND[h][d];let bg,txt,cls='hc';
+        if(kind==='re'){if(rw<=0){bg='var(--surface2)';txt='';}else{const t=Math.max(0,Math.min(1,(rw-minRw)/(maxRw-minRw)));bg='color-mix(in srgb, var(--accent) '+(6+t*84).toFixed(0)+'%, var(--surface))';txt=rw.toFixed(1);}}
+        else if(kind==='eur'){if(eu<=0){bg='var(--surface2)';txt='';}else{if(eu>=be){const t=Math.min((eu/be-1)/0.4,1);bg='color-mix(in srgb, var(--good) '+(20+t*50).toFixed(0)+'%, var(--surface))';}else{const t=Math.min((1-eu/be)/0.4,1);bg='color-mix(in srgb, var(--bad) '+(20+t*50).toFixed(0)+'%, var(--surface))';}txt=eu.toFixed(2);}}
+        else {bg=BAND[b];txt=BLET[b];cls='hc band';}
+        const tt=DD[d]+' '+h+'h · €/h '+eu.toFixed(2)+' · RE/WH '+(rw>0?rw.toFixed(2):'—')+' · '+BNAME[b];
         g+='<div class="'+cls+'" style="background:'+bg+'" title="'+tt+'">'+txt+'</div>';
       }
     }
@@ -156,7 +172,7 @@ function renderHeats(o){
   const lgEu='<div class="hleg"><span><span class="sw" style="background:var(--bad)"></span>&lt; break-even</span><span><span class="sw" style="background:var(--good)"></span>&ge; break-even</span></div>';
   const lgBa='<div class="hleg"><span><span class="sw" style="background:var(--good)"></span>Super pico</span><span><span class="sw" style="background:color-mix(in srgb,var(--good) 45%,var(--surface))"></span>Pico</span><span><span class="sw" style="background:var(--warn)"></span>Valle</span><span><span class="sw" style="background:var(--bad)"></span>Super valle</span></div>';
   let s='<div class="panel heatwrap"><h3>Mapa de franjas horarias · '+cur+'</h3>';
-  s+='<div class="ph">Días en columnas, horas en filas. <b>RE/h = RE ÷ WH</b> (requests por hora de conductor: demanda ÷ oferta). El mapa teórico mira solo el volumen de demanda; aquí superponemos el <b>€/h real</b> (ingreso ÷ WH) para ver dónde una franja rinde poco (mucha WH) o mucho (poca WH). Break-even '+cur+': <b>'+String(be).replace('.',',')+' €/h</b>. Nº mágico: a partir de <b>~'+H.reMagic+' de RE/WH</b> el €/h supera el break-even. Bandas: 12 super pico (SP) · 59 pico (P) · 67 valle (V) · 30 super valle (SV), ordenadas por RE/h y €/h combinados.</div>';
+  s+='<div class="ph">Días en columnas, horas en filas. <b>RE/h = RE ÷ WH</b> (requests por hora de conductor: demanda ÷ oferta). El mapa teórico mira solo el volumen de demanda; aquí superponemos el <b>€/h real</b> (ingreso ÷ WH) para ver dónde una franja rinde poco (mucha WH) o mucho (poca WH). Break-even '+cur+': <b>'+String(be).replace('.',',')+' €/h</b>. Nº mágico: a partir de <b>~'+H.reMagic+' de RE/WH</b> el €/h supera el break-even. Bandas: 12 super pico (SP) · 59 pico (P) · 67 valle (V) · 30 super valle (SV), ordenadas por RE/h y €/h combinados. <b>Los 3 mapas cambian con tus ajustes de turnos</b> (rotación/altas/libranzas): al variar las WH de cada día/franja, el RE/WH y el €/h se recalculan y las bandas se reordenan.</div>';
   s+='<div class="heatgrid3">';
   s+='<div class="hmini"><h4>1 · RE/h (RE ÷ WH)</h4><div class="hsub">requests por hora de conductor</div>'+grid('re')+lgRe+'</div>';
   s+='<div class="hmini"><h4>2 · €/h (ingreso ÷ WH)</h4><div class="hsub">verde ≥ break-even, rojo por debajo</div>'+grid('eur')+lgEu+'</div>';
@@ -189,6 +205,7 @@ function render(){
   h+='<div class="stickytop">';
   h+='<div class="seg">'+[['','Día completo'],['_m','Mañana'],['_t','Tarde/Noche']].map(function(b){return '<button aria-pressed="'+(blk===b[0])+'" onclick="setBlk(\''+b[0]+'\')">'+b[1]+'</button>'}).join('')+'</div>';
   h+='<div class="btns"><button class="btn primary" onclick="applyPreset()">Aplicar recomendación IA</button><button class="btn toggle" aria-pressed="'+cmp+'" onclick="toggleCmp()">'+(cmp?'✓ ':'')+'Comparar antes/después</button>'+(o.hm?'<button class="btn toggle" aria-pressed="'+heat+'" onclick="toggleHeat()">'+(heat?'✓ ':'')+'Mapa de franjas</button>':'')+'<button class="btn" onclick="reset()">Reset</button></div>';
+  if(!heat){
   h+='<div class="panel"><div class="chhead"><div><h3>'+blkName+' — Horas por día'+(cmp?' (antes vs después)':'')+' vs demanda &nbsp;&middot;&nbsp; €/h vs break-even</h3><div class="ph">'+(cmp?'Barra clara = actual (antes) &middot; barra en color = tu simulación (después) &middot; línea = demanda':'Barra = horas resultantes &middot; línea = demanda &middot; pastilla = €/h (verde ≥ break-even)')+'</div></div>';
   h+='<div class="ehmed">&euro;/h medio '+(blk?'('+(blk==='_m'?'mañana':'tarde')+') ':'')+'<span class="antes">'+eurhAntes.toFixed(1).replace('.',',')+'&euro;</span> &rarr; <span class="desp" style="color:'+colMed+'">'+eurhMed.toFixed(1).replace('.',',')+'&euro;</span><span class="bevm">break-even '+String(be).replace('.',',')+'&euro;</span></div></div>';
   h+='<div class="bar-row">';
@@ -199,7 +216,8 @@ function render(){
       h+='<div class="dcol"><div style="font-family:var(--mono);font-size:11.5px;font-weight:600">'+fmt(r.wh[i])+'</div><div class="barbox"><div class="bar" style="height:'+bh+'px"></div><div class="tgt" style="bottom:'+th+'px"></div></div><div class="dlab">'+DIAS[i]+'</div><div class="pill" style="background:'+colN+'22;color:'+colN+'">'+eN.toFixed(1).replace('.',',')+'&euro;</div></div>';}});
   h+='</div><div class="legend"><span><span class="sw" style="background:var(--accent)"></span>'+(cmp?'después':'horas nuevas')+'</span>'+(cmp?'<span><span class="sw" style="background:var(--faint)"></span>antes</span>':'')+'<span><span class="sw" style="border-top:2px dashed var(--ink);width:14px;height:0"></span>demanda</span><span>break-even '+cur+': <b style="font-family:var(--mono)">'+String(be).replace('.',',')+'€/h</b></span></div>';
   h+='<details class="explain"><summary>¿Cómo se calcula el «€/h», el «antes» y el «después»?</summary><div><b>&euro;/h</b> = <b>&euro;/h norm</b> del Cuadro de Mando = <b>0,76 &times; Σ(Price Local) &divide; Σ(horas WH)</b> = ingreso neto real por hora (no el coste), ponderado por horas y por franja/día (media semanas 33-36).<br><b>Antes</b> = situaci&oacute;n real actual, sin tocar nada. <b>Después</b> = tu simulaci&oacute;n: se mantiene <b>fija la facturaci&oacute;n de cada día/franja</b> y se recalculan solo las <b>horas</b>: (1) <b>rotar/incorporar</b> escala las horas del turno &mdash; horas &times; (N &minus; bajas + altas) &divide; N; (2) <b>mover una libranza</b> quita del día que pasa a librar las horas de esos conductores (nº movidos &times; horas-por-día). Luego <b>&euro;/h = facturaci&oacute;n &divide; horas nuevas</b>. Por eso recortar horas en franjas flojas sube el &euro;/h. <b>Mañana = 06-14h · Tarde/Noche = 15-05h</b>, cada una con su demanda y su &euro;/h, para ver en qué franja sobra o falta gente. Estimaci&oacute;n lineal.</div></details>';
-  h+='</div></div>';
+  h+='</div>'; }
+  h+='</div>';
   // ===== tabla de turnos (se desplaza por debajo del gráfico fijo) =====
   h+='<div class="panel" style="margin-top:16px"><h3>Ajuste por turno'+(blk?' · '+blkName:'')+'</h3><div class="ph">Echa/contrata y reparte las libranzas movibles (LM/MM/MJ). Los turnos con contrato fijo están bloqueados. El gráfico de arriba se queda fijo: verás cómo cambia al tocar cualquier turno.'+(blk?' <b>Solo se muestran los turnos con actividad en '+(blk==='_m'?'mañana':'tarde/noche')+'.</b>':'')+'</div>';
   h+='<div class="thead"><div>Turno</div><div>N actual</div><div>Rotar</div><div>Incorporar</div><div>Libranza movible (LM/MM/MJ)</div></div>';
